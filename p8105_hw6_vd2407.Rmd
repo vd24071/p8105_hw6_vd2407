@@ -7,7 +7,8 @@ output: github_document
 
 ```{r setup, include=FALSE}
 library(tidyverse)
-
+library(modelr)
+library(mgcv)
 ```
 
 ## Problem 2
@@ -33,13 +34,19 @@ wapo_homocide =
     victim_sex = as.factor(victim_sex),
     resolved_homocide = as.numeric(disposition == "Closed by arrest")
   ) %>% 
-  filter(city_state != "Dallas, TX" | city_state != "Phoenix, AZ" | city_state != "Kansas City, MO") %>%      filter(city_state != "Tulsa, AL") %>% 
-  filter(victim_race == "White" | victim_race == "Black") %>% 
+  filter(
+    city_state != "Dallas, TX" | 
+      city_state != "Phoenix, AZ" | 
+      city_state != "Kansas City, MO") %>%      
+  filter(city_state != "Tulsa, AL") %>% 
+  filter(victim_race == "White" | 
+           victim_race == "Black") %>% 
   mutate(
     victim_race = fct_relevel(victim_race, "White")
   ) %>% 
   filter(!is.na(victim_age)) %>% 
-  filter(victim_sex == "Male" | victim_sex == "Female") %>% 
+  filter(victim_sex == "Male" | 
+           victim_sex == "Female") %>% 
   mutate(victim_sex = fct_relevel(victim_sex, "Male", "Female")) %>% 
   droplevels() %>% 
   nest_by(city_state)
@@ -118,5 +125,141 @@ final_glm_df %>%
   scale_x_discrete(
     guide = guide_axis(angle = 40)
   ) 
+```
+Albuquerque, NM has the lowest adjusted OR for solving homocides comparing male to female victims while New York, NY has the highest. Only a few cities have an OR less than 1, meaning there is a higher rate for solving homocides among males compared to females, however, the 95% confidence intervals for these cities also includes the null value of 1, so we conclude that there is no significant difference. New York, NY has the highest OR and also does not include the null value of 1 in it's confidence interval, so there is a significant difference in solved homocide rates where females have a higher solve rate than males.
+
+
+## Problem 3
+
+```{r}
+birthweight_df =
+  read_csv("./data/birthweight.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(
+    babysex = as.factor(babysex),
+    bhead = as.numeric(bhead),
+    blength = as.numeric(blength),
+    bwt = as.numeric(bwt),
+    delwt = as.numeric(delwt),
+    fincome = as.numeric(fincome),
+    frace = as.factor(frace),
+    gaweeks = as.numeric(gaweeks),
+    malform = as.factor(malform),
+    menarche = as.integer(menarche),
+    mheight = as.numeric(mheight),
+    momage = as.integer(momage),
+    mrace = as.factor(mrace),
+    parity = as.integer(parity),
+    pnumlbw = as.integer(pnumlbw),
+    pnumsga = as.integer(pnumsga),
+    ppbmi = as.numeric(ppbmi),
+    ppwt = as.numeric(ppwt),
+    smoken = as.integer(smoken),
+    wtgain = as.numeric(wtgain),
+    babysex = fct_relevel(babysex, "1"),
+    frace = fct_relevel(frace, "1"),
+    malform = fct_relevel(malform, "0"),
+    mrace = fct_relevel(mrace, "1")
+  )
+```
+There doesn't seem to be any missing data in the birthweight dataset after running a sum(is.na).
+
+Based on a hypothesized theory, I propose a regression model for birthweight with predictors including length of gestational pregnancy, mother's height, and mother's age at delivery. Since baby birthweight is a continuous variable, I will fit a linear model with all previously mentioned predictors as numeric/continuous variables.
+
+```{r}
+model_bw = 
+  birthweight_df %>% 
+  lm(bwt ~ gaweeks + mheight + momage, data = .)
+
+model_bw %>% 
+  broom::glance()
+
+model_bw %>% 
+  broom::tidy()
+```
+
+```{r}
+birthweight_df %>% 
+  add_predictions(model_bw) %>% 
+  add_residuals(model_bw) %>% 
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point() +
+  geom_line(y = 0, color = "red") +
+  labs(
+    title = "Fitted Values vs Residuals for Birthweight Linear Model",
+    x = "Fitted Values",
+    y = "Residuals"
+  )
+  
+```
+
+### Comparing my Model to Other Models Using Cross-Validation:
+
+Modelling length at birth and gestational age:
+
+```{r}
+model_leng_ga =
+  birthweight_df %>% 
+  lm(bwt ~ blength + gaweeks, data = .)
+
+model_leng_ga %>% 
+  broom::glance()
+
+model_leng_ga %>% 
+  broom::tidy()
+```
+
+Modelling head circumference, length, sex, and all interactions (including three-way interactions):
+
+```{r}
+model_interac =
+  birthweight_df %>% 
+  lm(bwt ~ bhead * blength * babysex, data = .)
+
+model_interac %>% 
+  broom::glance()
+
+model_interac %>% 
+  broom::tidy()
+```
+
+```{r}
+bw_cv_df =
+  crossv_mc(birthweight_df, 100)
+```
+
+
+```{r}
+bw_cv_df =
+  bw_cv_df %>% 
+  mutate(
+    orig_mod = map(train, ~lm(bwt ~ gaweeks + mheight + momage, data = .x)),
+    leng_ga_mod = map(train, ~lm(bwt ~ blength + gaweeks, data = .)),
+    interac_mod = map(train, ~lm(bwt ~ bhead * blength * babysex, data = .))
+  ) %>% 
+  mutate(
+    rmse_orig = map2_dbl(orig_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_leng_ga = map2_dbl(leng_ga_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_interac = map2_dbl(interac_mod, test, ~rmse(model = .x, data = .y))
+    )
+```
+
+```{r}
+bw_cv_df %>%
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + 
+  geom_violin() +
+  labs(
+    title = "RMSE for Each Birthweight Model",
+    x = "Model Name",
+    y = "RMSE"
+  )
+  
 ```
 
